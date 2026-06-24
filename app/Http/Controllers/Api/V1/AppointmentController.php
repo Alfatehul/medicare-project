@@ -51,44 +51,62 @@ class AppointmentController extends Controller
         // Generate unique order ID for Midtrans
         $orderId = 'MEDICARE-' . $appointment->id . '-' . time();
 
-        // Create Midtrans Snap transaction
-        $midtransResult = $this->midtransService->createTransaction(
-            orderId: $orderId,
-            grossAmount: $doctor->fee_idr,
-            customerDetails: [
+        // Setup Midtrans Configuration
+        \Midtrans\Config::$serverKey = env('MIDTRANS_SERVER_KEY');
+        \Midtrans\Config::$isProduction = false; // Pastikan ini wajib FALSE
+        \Midtrans\Config::$isSanitized = true;
+        \Midtrans\Config::$is3ds = true;
+
+        $payload = [
+            'transaction_details' => [
+                'order_id'     => $orderId,
+                'gross_amount' => (int) $doctor->fee_idr,
+            ],
+            'customer_details' => [
                 'first_name' => $user->name,
+                'email'      => strtolower(preg_replace('/[^a-zA-Z0-9]/', '', $user->name)) . '@example.com',
                 'phone'      => $user->whatsapp_number,
             ],
-        );
+        ];
 
-        if (! $midtransResult['success']) {
-            // Payment creation failed, but appointment is saved as pending
+        try {
+            // Create transaction using Midtrans\Snap
+            $snapToken = \Midtrans\Snap::getSnapToken($payload);
+            $redirectUrl = (\Midtrans\Config::$isProduction ? 'https://app.midtrans.com' : 'https://app.sandbox.midtrans.com') . '/snap/v1/redirect/' . $snapToken;
+
+            // Save payment token and redirect URL to appointment
+            $appointment->update([
+                'payment_token' => $snapToken,
+                'redirect_url'  => $redirectUrl,
+            ]);
+
+            return response()->json([
+                'status'       => 'success',
+                'message'      => 'Reservasi berhasil dibuat. Silakan lakukan pembayaran.',
+                'snap_token'   => $snapToken,
+                'redirect_url' => $redirectUrl,
+                'data'         => [
+                    'appointment' => $this->formatAppointment($appointment, $doctor),
+                    'payment'     => [
+                        'token'        => $snapToken,
+                        'redirect_url' => $redirectUrl,
+                    ],
+                ],
+            ], 201);
+        } catch (\Exception $e) {
+            Log::error('Midtrans Snap error: ' . $e->getMessage(), [
+                'appointment_id' => $appointment->id,
+                'trace'          => $e->getTraceAsString(),
+            ]);
+
             return response()->json([
                 'status'  => 'error',
-                'message' => $midtransResult['message'],
+                'message' => 'Gagal menghubungkan ke payment gateway Midtrans: ' . $e->getMessage(),
                 'data'    => [
                     'appointment' => $this->formatAppointment($appointment, $doctor),
                 ],
             ], 502);
         }
-
-        // Save payment token and redirect URL to appointment
-        $appointment->update([
-            'payment_token' => $midtransResult['token'],
-            'redirect_url'  => $midtransResult['redirect_url'],
-        ]);
-
-        return response()->json([
-            'status'  => 'success',
-            'message' => 'Reservasi berhasil dibuat. Silakan lakukan pembayaran.',
-            'data'    => [
-                'appointment'  => $this->formatAppointment($appointment, $doctor),
-                'payment'      => [
-                    'token'        => $midtransResult['token'],
-                    'redirect_url' => $midtransResult['redirect_url'],
-                ],
-            ],
-        ], 201);
     }
 
     /**

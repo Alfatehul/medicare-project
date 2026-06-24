@@ -29,49 +29,66 @@ class AuthController extends Controller
      */
     public function requestOtp(Request $request): JsonResponse
     {
-        $validated = $request->validate([
-            'whatsapp_number' => ['required', 'string', 'regex:/^(08|\+62|62)[0-9]{8,13}$/'],
-        ], [
-            'whatsapp_number.required' => 'Nomor WhatsApp wajib diisi.',
-            'whatsapp_number.regex'    => 'Format nomor WhatsApp tidak valid.',
-        ]);
+        try {
+            $validated = $request->validate([
+                'whatsapp_number' => ['required', 'string', 'regex:/^(08|\+62|62)[0-9]{8,13}$/'],
+            ], [
+                'whatsapp_number.required' => 'Nomor WhatsApp wajib diisi.',
+                'whatsapp_number.regex'    => 'Format nomor WhatsApp tidak valid.',
+            ]);
 
-        $phoneNumber = $validated['whatsapp_number'];
-        $cacheKey = "otp:{$phoneNumber}";
+            $phoneNumber = $validated['whatsapp_number'];
 
-        // Prevent OTP flooding: check if an OTP was recently sent
-        if (Cache::has($cacheKey)) {
-            $ttl = Cache::get("{$cacheKey}:sent_at");
+            // Sanitize to consistent international format for cache key
+            $sanitizedPhone = WhatsappService::sanitizePhoneNumber($phoneNumber);
+            $cacheKey = "otp:{$sanitizedPhone}";
 
-            if ($ttl && now()->diffInSeconds($ttl) < 60) {
+            // Prevent OTP flooding: check if an OTP was recently sent
+            if (Cache::has($cacheKey)) {
+                $sentAt = Cache::get("{$cacheKey}:sent_at");
+
+                if ($sentAt && (time() - $sentAt) < 60) {
+                    return response()->json([
+                        'status'  => 'error',
+                        'message' => 'OTP sudah dikirim. Tunggu 60 detik sebelum meminta ulang.',
+                    ], 429);
+                }
+            }
+
+            // Generate 6-digit OTP
+            $otpCode = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+
+            // Store OTP in cache for 5 minutes (keyed by sanitized phone)
+            Cache::put($cacheKey, $otpCode, now()->addMinutes(5));
+            Cache::put("{$cacheKey}:sent_at", time(), now()->addMinutes(5));
+
+            // Send OTP via WhatsApp
+            $result = $this->whatsappService->sendOtp($phoneNumber, $otpCode);
+
+            if (! $result['success']) {
                 return response()->json([
                     'status'  => 'error',
-                    'message' => 'OTP sudah dikirim. Tunggu 60 detik sebelum meminta ulang.',
-                ], 429);
+                    'message' => $result['message'],
+                ], 502);
             }
-        }
 
-        // Generate 6-digit OTP
-        $otpCode = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+            return response()->json([
+                'status'  => 'success',
+                'message' => 'OTP berhasil dikirim ke nomor WhatsApp Anda.',
+            ]);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            throw $e; // Let Laravel handle validation errors normally
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error('Unexpected error in requestOtp.', [
+                'error'     => $e->getMessage(),
+                'exception' => get_class($e),
+            ]);
 
-        // Store OTP in cache for 5 minutes
-        Cache::put($cacheKey, $otpCode, now()->addMinutes(5));
-        Cache::put("{$cacheKey}:sent_at", now(), now()->addMinutes(5));
-
-        // Send OTP via WhatsApp
-        $result = $this->whatsappService->sendOtp($phoneNumber, $otpCode);
-
-        if (! $result['success']) {
             return response()->json([
                 'status'  => 'error',
-                'message' => $result['message'],
-            ], 502);
+                'message' => 'Terjadi kesalahan internal. Silakan coba lagi.',
+            ], 500);
         }
-
-        return response()->json([
-            'status'  => 'success',
-            'message' => 'OTP berhasil dikirim ke nomor WhatsApp Anda.',
-        ]);
     }
 
     /**
@@ -96,7 +113,10 @@ class AuthController extends Controller
 
         $phoneNumber = $validated['whatsapp_number'];
         $otpCode = $validated['otp_code'];
-        $cacheKey = "otp:{$phoneNumber}";
+
+        // Use sanitized phone for cache key (must match requestOtp)
+        $sanitizedPhone = WhatsappService::sanitizePhoneNumber($phoneNumber);
+        $cacheKey = "otp:{$sanitizedPhone}";
 
         // Retrieve cached OTP
         $cachedOtp = Cache::get($cacheKey);
@@ -112,10 +132,10 @@ class AuthController extends Controller
         Cache::forget($cacheKey);
         Cache::forget("{$cacheKey}:sent_at");
 
-        // Find or create user by WhatsApp number
+        // Find or create user by sanitized WhatsApp number
         $user = User::firstOrCreate(
-            ['whatsapp_number' => $phoneNumber],
-            ['name' => 'User ' . Str::substr($phoneNumber, -4)],
+            ['whatsapp_number' => $sanitizedPhone],
+            ['name' => 'User ' . Str::substr($sanitizedPhone, -4)],
         );
 
         // Revoke existing tokens for this device context
