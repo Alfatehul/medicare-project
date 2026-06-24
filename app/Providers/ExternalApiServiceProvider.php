@@ -42,8 +42,8 @@ class ExternalApiServiceProvider extends ServiceProvider
 
         $this->app->singleton(NutritionService::class, function () {
             return new NutritionService(
-                appId: config('services.edamam.app_id', ''),
-                appKey: config('services.edamam.app_key', ''),
+                appId: (string) config('services.edamam.app_id', ''),
+                appKey: (string) config('services.edamam.app_key', ''),
             );
         });
     }
