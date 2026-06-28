@@ -1,0 +1,53 @@
+Alur Kerja Backend Laravel (Aplikasi MediCare)
+=================================================
+
+Alur kerja backend (mulai dari saat pengguna berinteraksi di frontend hingga menerima respons) secara umum melewati beberapa lapisan (layer). Berikut adalah penjelasan langkah demi langkah sesuai dengan arsitektur kode di proyek MediCare Anda:
+
+1. Request dari Frontend (Next.js)
+----------------------------------
+Frontend Next.js Anda mengirimkan HTTP Request ke server Laravel (contoh: request `POST /api/v1/auth/request-otp` saat login).
+- Di tahap awal ini, pengaturan **CORS** (di `config/cors.php` yang sedang Anda buka) bekerja pertama kali. Sistem akan memeriksa apakah URL Frontend memiliki izin (Allowed Origins) untuk "berkomunikasi" dengan Backend.
+
+2. Routing (routes/api.php)
+----------------------------------
+Setelah diizinkan oleh CORS, Request masuk ke Laravel dan ditangkap oleh **Router**.
+- Router bertugas sebagai "papan petunjuk jalan". Ia mengecek URL yang diminta.
+- Contoh: `Route::post('/auth/request-otp', [AuthController::class, 'requestOtp']);`
+- Router akan mengarahkan request tersebut ke rute Controller yang telah ditentukan.
+
+3. Middleware (Penjaga Gerbang)
+----------------------------------
+Sebelum mencapai Controller, request biasanya harus melewati **Middleware** (pos satpam).
+- **Sanctum Middleware:** Jika request ditujukan ke halaman yang butuh login (seperti riwayat Appointment), middleware akan mengecek apakah request membawa Token otentikasi yang sah. Jika tidak sah, request langsung ditolak dengan status *401 Unauthorized*.
+- **Throttle Middleware:** Untuk mencegah spam (misalnya pada halaman request OTP), middleware bisa membatasi jumlah klik per menit.
+
+4. Controller (app/Http/Controllers/)
+----------------------------------
+Di sinilah pengatur lalu lintas utama berada (seperti `AuthController` atau `AppointmentController`). Tugas utama Controller:
+- **Validasi Data:** Memastikan data yang dikirim frontend benar (misal: "nomor telepon wajib diisi", "jumlah bayar harus angka").
+- **Delegasi Tugas:** Controller yang baik (*Clean Code*) tidak akan menulis semua rumus rumit di dalamnya. Controller hanya menyuruh bagian lain (*Service* atau *Model*) untuk bekerja.
+
+5. Service Layer (app/Services/)
+----------------------------------
+Tempat di mana "logika bisnis" yang rumit atau integrasi pihak ketiga (API eksternal) dijalankan.
+- Di proyek Anda, terdapat `WhatsappService` (Fonnte), `MidtransService` (Pembayaran), dan `NutritionService` (Edamam).
+- Contoh: Controller menyuruh `WhatsappService` mengirim pesan. Service inilah yang bertugas memformat nomor HP ke +62 dan mengirim data tembak ke server API Fonnte. Alasan dipisah adalah agar kode lebih rapi dan Service ini bisa dipakai ulang oleh Controller lain jika dibutuhkan.
+
+6. Model & Database (app/Models/)
+----------------------------------
+Jika proses membutuhkan simpan/ambil data, Laravel menggunakan **Model** (Eloquent ORM) untuk berkomunikasi dengan Database (MySQL).
+- Daripada menulis perintah SQL manual (seperti `SELECT * FROM users`), Laravel memakai Model.
+- Contoh: Setelah Midtrans mengkonfirmasi pembayaran sukses, `MidtransService` menyuruh Model untuk meng-update status di database: `Appointment::where('id', $id)->update(['status' => 'paid'])`.
+
+7. Response (Kembali ke Frontend)
+----------------------------------
+Setelah semua pekerjaan selesai, Controller bertugas mengemas hasilnya dalam bentuk data **JSON** dan mengirimkannya kembali ke Frontend.
+- Contoh balasan sukses: `return response()->json(['success' => true, 'message' => 'OTP berhasil dikirim']);`
+- Contoh balasan gagal: `return response()->json(['success' => false, 'message' => 'Nomor tidak valid'], 400);`
+- Frontend Next.js akan menerima JSON ini dan menampilkannya sebagai *Notifikasi Sukses* atau pesan *Error* di layar pengguna.
+
+
+--------------------------------------------------------------------------------------------------
+Ringkasan Alur Singkat:
+[FRONTEND] -> (CORS & Middleware) -> [ROUTE] -> [CONTROLLER] -> ([SERVICE] & [MODEL/DB]) -> [CONTROLLER] -> [FRONTEND]
+--------------------------------------------------------------------------------------------------
