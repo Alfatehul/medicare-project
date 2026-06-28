@@ -4,10 +4,10 @@
 
 **Nama Kelompok:** `7`
 
-**Nama Proyek / Aplikasi:** `MediCare Patient Portal`
-**link website:** `https://medicare-project-production.up.railway.app`
-**Jumlah Anggota:** `3` orang
-**Repositori:** `https://github.com/Alfatehul/medicare-project.git`
+- **Nama Proyek / Aplikasi:** `MediCare Patient Portal`
+- **link website:** `https://medicare-project-production.up.railway.app`
+- **Jumlah Anggota:** `3` orang
+- **Repositori:** `https://github.com/Alfatehul/medicare-project.git`
 
 ---
 
